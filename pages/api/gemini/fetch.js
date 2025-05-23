@@ -1,4 +1,5 @@
 import { sendGeminiRequest } from '@derhuerst/gemini/client.js';
+import { isUrlSafe } from '../../../utils/security';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -9,6 +10,11 @@ export default async function handler(req, res) {
   
   if (!url || !url.startsWith('gemini://')) {
     return res.status(400).json({ error: 'Invalid Gemini URL' });
+  }
+
+  // Security check
+  if (!isUrlSafe(url)) {
+    return res.status(403).json({ error: 'Access to this URL is blocked for security reasons' });
   }
 
   try {
