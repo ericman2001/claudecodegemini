@@ -1,9 +1,11 @@
 import Head from 'next/head';
+import { useState } from 'react';
 import GemtextRenderer from '../components/GemtextRenderer';
 import NavigationBar from '../components/NavigationBar';
 import AddressBar from '../components/AddressBar';
 import LoadingSpinner from '../components/LoadingSpinner';
 import ErrorAlert from '../components/ErrorAlert';
+import AboutDialog from '../components/AboutDialog';
 import useGeminiNavigation from '../hooks/useGeminiNavigation';
 
 /**
@@ -18,6 +20,9 @@ import useGeminiNavigation from '../hooks/useGeminiNavigation';
  * - Error handling and loading states
  */
 export default function Home() {
+  // State for controlling the About dialog
+  const [showAbout, setShowAbout] = useState(false);
+  
   // Extract all navigation state and methods from our custom hook
   const {
     url,          // Current Gemini URL being displayed
@@ -52,6 +57,7 @@ export default function Home() {
               onForward={goForward}
               onRefresh={refresh}
               onHome={goHome}
+              onAbout={() => setShowAbout(true)}
             />
             <AddressBar
               url={url}
@@ -88,6 +94,12 @@ export default function Home() {
           )}
         </div>
       </div>
+      
+      {/* About Dialog */}
+      <AboutDialog 
+        isOpen={showAbout}
+        onClose={() => setShowAbout(false)}
+      />
     </>
   );
 }

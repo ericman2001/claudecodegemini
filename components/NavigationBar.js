@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, Home as HomeIcon, RefreshCw } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Home as HomeIcon, RefreshCw, Info } from 'lucide-react';
 
 /**
  * NavigationBar Component
@@ -13,8 +13,9 @@ import { ChevronLeft, ChevronRight, Home as HomeIcon, RefreshCw } from 'lucide-r
  * @param {Function} onForward - Callback for forward button click
  * @param {Function} onRefresh - Callback for refresh button click
  * @param {Function} onHome - Callback for home button click
+ * @param {Function} onAbout - Callback for about button click
  */
-const NavigationBar = ({ canGoBack, canGoForward, onBack, onForward, onRefresh, onHome }) => {
+const NavigationBar = ({ canGoBack, canGoForward, onBack, onForward, onRefresh, onHome, onAbout }) => {
   return (
     <div className="flex items-center gap-2 mb-4">
       {/* Back button - disabled when no history available */}
@@ -50,6 +51,18 @@ const NavigationBar = ({ canGoBack, canGoForward, onBack, onForward, onRefresh, 
         title="Home"
       >
         <HomeIcon size={20} />
+      </button>
+      
+      {/* Spacer to push About button to the right */}
+      <div className="flex-1" />
+      
+      {/* About button - shows application information */}
+      <button
+        onClick={onAbout}
+        className="p-2 rounded hover:bg-gray-100"
+        title="About"
+      >
+        <Info size={20} />
       </button>
     </div>
   );
