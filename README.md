@@ -164,6 +164,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## Future Plans
 
+- Electron Container
 - Enhanced styling and themes
 - Bookmarks functionality
 - Search within Geminispace
