@@ -44,11 +44,17 @@ const useGeminiNavigation = () => {
   /**
    * Navigate to a new Gemini URL
    * Handles relative URLs, redirects, and history management
+   * @param {string} targetUrl - The URL to navigate to
+   * @param {Object} options - Navigation options
+   * @param {boolean} options.isHistoryNavigation - If true, doesn't modify history (for back/forward)
+   * @param {number} options.targetIndex - The history index to update to (for back/forward)
    */
-  const navigate = useCallback(async (targetUrl) => {
+  const navigate = useCallback(async (targetUrl, options = {}) => {
+    const { isHistoryNavigation = false, targetIndex = null } = options;
+    
     try {
-      // Resolve relative URLs against current URL
-      const resolvedUrl = resolveGeminiUrl(targetUrl, url);
+      // Resolve relative URLs against current URL (skip for history navigation)
+      const resolvedUrl = isHistoryNavigation ? targetUrl : resolveGeminiUrl(targetUrl, url);
       
       setLoading(true);
       setError('');
@@ -60,17 +66,30 @@ const useGeminiNavigation = () => {
         setContent(result.content);
         setUrl(resolvedUrl);
         
-        // Update history only if this is a new navigation (not from history)
-        if (historyIndex === -1 || history[historyIndex] !== resolvedUrl) {
-          // Truncate any forward history when navigating to new page
-          const newHistory = history.slice(0, historyIndex + 1);
-          newHistory.push(resolvedUrl);
-          setHistory(newHistory);
-          setHistoryIndex(newHistory.length - 1);
+        if (isHistoryNavigation) {
+          // For history navigation, just update the index
+          setHistoryIndex(targetIndex);
+        } else {
+          // For new navigation, update history
+          if (historyIndex === -1 || history[historyIndex] !== resolvedUrl) {
+            // Truncate any forward history when navigating to new page
+            const newHistory = history.slice(0, historyIndex + 1);
+            newHistory.push(resolvedUrl);
+            setHistory(newHistory);
+            setHistoryIndex(newHistory.length - 1);
+          }
         }
       } else if (result.redirect) {
         // Handle Gemini protocol redirects (status 30-39)
-        navigate(result.redirect);
+        if (isHistoryNavigation) {
+          // Update the history entry with the redirect URL
+          const newHistory = [...history];
+          newHistory[targetIndex] = result.redirect;
+          setHistory(newHistory);
+          navigate(result.redirect, { isHistoryNavigation: true, targetIndex });
+        } else {
+          navigate(result.redirect);
+        }
         return;
       } else {
         // Display error with status code
@@ -89,10 +108,8 @@ const useGeminiNavigation = () => {
   const goBack = useCallback(() => {
     if (historyIndex > 0) {
       const newIndex = historyIndex - 1;
-      setHistoryIndex(newIndex);
       const targetUrl = history[newIndex];
-      setUrl(targetUrl);
-      navigate(targetUrl);
+      navigate(targetUrl, { isHistoryNavigation: true, targetIndex: newIndex });
     }
   }, [historyIndex, history, navigate]);
 
@@ -102,10 +119,8 @@ const useGeminiNavigation = () => {
   const goForward = useCallback(() => {
     if (historyIndex < history.length - 1) {
       const newIndex = historyIndex + 1;
-      setHistoryIndex(newIndex);
       const targetUrl = history[newIndex];
-      setUrl(targetUrl);
-      navigate(targetUrl);
+      navigate(targetUrl, { isHistoryNavigation: true, targetIndex: newIndex });
     }
   }, [historyIndex, history, navigate]);
 
