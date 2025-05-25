@@ -17,6 +17,7 @@ const BLOCKED_PORTS = [
   23, // Telnet
   25, // SMTP
   445, // SMB
+  3306, // MySQL
   3389, // RDP
 ];
 
@@ -54,3 +55,39 @@ export const RATE_LIMIT = {
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100, // Limit each IP to 100 requests per windowMs
 };
+
+const rateLimitStore = new Map();
+
+// Clean up old entries every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, record] of rateLimitStore.entries()) {
+    if (now - record.windowStart > RATE_LIMIT.windowMs) {
+      rateLimitStore.delete(ip);
+    }
+  }
+}, 5 * 60 * 1000);
+
+export function applyRateLimit(req, res) {
+  const ip =
+    req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
+    req.socket.remoteAddress;
+  const now = Date.now();
+  const { windowMs, max } = RATE_LIMIT;
+  let record = rateLimitStore.get(ip);
+
+  if (!record || now - record.windowStart > windowMs) {
+    record = { count: 1, windowStart: now };
+  } else {
+    record.count++;
+  }
+
+  rateLimitStore.set(ip, record);
+
+  if (record.count > max) {
+    res.status(429).json({ error: 'Too Many Requests' });
+    return false;
+  }
+
+  return true;
+}
