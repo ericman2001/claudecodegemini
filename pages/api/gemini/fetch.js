@@ -1,5 +1,5 @@
 import { sendGeminiRequest } from '@derhuerst/gemini/client.js';
-import { isUrlSafe } from '../../../utils/security';
+import { isUrlSafe, applyRateLimit } from '../../../utils/security';
 
 /**
  * API endpoint for fetching Gemini protocol content
@@ -12,7 +12,11 @@ import { isUrlSafe } from '../../../utils/security';
  * @param {Object} res - Next.js API response object
  * @returns {Object} JSON response with fetched content or error information
  */
-export default async function handler(req, res) {
+export default async function handler(req, res) 
+  if (!applyRateLimit(req, res)) {
+    return;
+  }
+
   // Only accept POST requests to prevent URL logging in server logs
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
