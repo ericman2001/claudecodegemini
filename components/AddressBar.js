@@ -1,16 +1,39 @@
 import { useState, useEffect } from 'react';
 
+/**
+ * AddressBar Component
+ * 
+ * A browser-style address bar for entering and navigating to Gemini URLs.
+ * Provides an input field with keyboard support and a submit button.
+ * 
+ * @component
+ * @param {Object} props - Component props
+ * @param {string} props.url - The current URL to display in the address bar
+ * @param {Function} props.onNavigate - Callback function called when user submits a URL
+ * @param {boolean} props.loading - Whether content is currently loading (disables the Go button)
+ * @returns {JSX.Element} Address bar with input and go button
+ */
 const AddressBar = ({ url, onNavigate, loading }) => {
+  // Local state for the input field value
   const [inputUrl, setInputUrl] = useState(url);
 
+  // Sync the input field with the current URL when it changes externally
+  // (e.g., when navigating via history buttons or clicking links)
   useEffect(() => {
     setInputUrl(url);
   }, [url]);
 
+  /**
+   * Handle form submission when user clicks Go or presses Enter
+   */
   const handleSubmit = () => {
     onNavigate(inputUrl);
   };
 
+  /**
+   * Handle keyboard events - submit on Enter key
+   * @param {KeyboardEvent} e - The keyboard event
+   */
   const handleKeyDown = (e) => {
     if (e.key === 'Enter') {
       handleSubmit();
