@@ -12,7 +12,7 @@ import { isUrlSafe, applyRateLimit } from '../../../utils/security';
  * @param {Object} res - Next.js API response object
  * @returns {Object} JSON response with fetched content or error information
  */
-export default async function handler(req, res) 
+export default async function handler(req, res) {
   if (!applyRateLimit(req, res)) {
     return;
   }
