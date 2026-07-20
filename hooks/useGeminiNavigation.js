@@ -11,6 +11,9 @@ import { DEFAULT_GEMINI_URL, API_ENDPOINTS } from '../utils/constants';
  * 
  * @returns {Object} Navigation state and control functions
  */
+// Maximum number of client-side redirect hops before aborting (loop protection).
+const MAX_REDIRECT_DEPTH = 5;
+
 const useGeminiNavigation = () => {
   // Current URL being displayed
   const [url, setUrl] = useState(DEFAULT_GEMINI_URL);
@@ -50,9 +53,16 @@ const useGeminiNavigation = () => {
    * @param {number} options.targetIndex - The history index to update to (for back/forward)
    */
   const navigate = useCallback(async (targetUrl, options = {}) => {
-    const { isHistoryNavigation = false, targetIndex = null } = options;
-    
+    const { isHistoryNavigation = false, targetIndex = null, redirectDepth = 0 } = options;
+
     try {
+      // Guard against redirect loops from misbehaving/malicious servers.
+      if (redirectDepth > MAX_REDIRECT_DEPTH) {
+        setError('Too many redirects');
+        setLoading(false);
+        return;
+      }
+
       // Resolve relative URLs against current URL (skip for history navigation)
       const resolvedUrl = isHistoryNavigation ? targetUrl : resolveGeminiUrl(targetUrl, url);
       
@@ -86,9 +96,9 @@ const useGeminiNavigation = () => {
           const newHistory = [...history];
           newHistory[targetIndex] = result.redirect;
           setHistory(newHistory);
-          navigate(result.redirect, { isHistoryNavigation: true, targetIndex });
+          navigate(result.redirect, { isHistoryNavigation: true, targetIndex, redirectDepth: redirectDepth + 1 });
         } else {
-          navigate(result.redirect);
+          navigate(result.redirect, { redirectDepth: redirectDepth + 1 });
         }
         return;
       } else {

@@ -1,17 +1,142 @@
 import { sendGeminiRequest } from '@derhuerst/gemini/client.js';
 import { isUrlSafe, applyRateLimit } from '../../../utils/security';
+import { verifyFingerprint } from '../../../utils/tofu';
 
 /**
  * API endpoint for fetching Gemini protocol content
- * 
+ *
  * This endpoint acts as a proxy between the web browser and Gemini servers,
  * handling the Gemini protocol communication and returning content that can
  * be rendered in a web browser.
- * 
+ *
  * @param {Object} req - Next.js API request object
  * @param {Object} res - Next.js API response object
  * @returns {Object} JSON response with fetched content or error information
  */
+
+// Maximum number of redirects to follow before giving up (loop protection).
+const MAX_REDIRECTS = 5;
+// Maximum size of a response body we are willing to buffer (DoS protection).
+const MAX_CONTENT_BYTES = 5 * 1024 * 1024; // 5 MB
+
+/**
+ * Error carrying a message that is safe to show to the client. Any other error
+ * is reported to the client generically to avoid leaking internal details.
+ */
+class UserFacingError extends Error {
+  constructor(message, statusCode = 502) {
+    super(message);
+    this.name = 'UserFacingError';
+    this.userMessage = message;
+    this.httpStatus = statusCode;
+  }
+}
+
+/**
+ * Perform a single Gemini request (no redirect following) and buffer the body,
+ * enforcing a maximum content length. Also captures the server's TLS
+ * certificate fingerprint for TOFU verification.
+ *
+ * @param {string} targetUrl - Fully-qualified, already-validated gemini:// URL.
+ * @returns {Promise<{statusCode:number, statusMessage:string, meta:string, content:string, fingerprint:?string}>}
+ */
+function sendSingleRequest(targetUrl) {
+  return new Promise((resolve, reject) => {
+    sendGeminiRequest(
+      targetUrl,
+      {
+        followRedirects: false, // We follow redirects manually with per-hop validation.
+        connectTimeout: 10000, // 10 second connection timeout
+        headersTimeout: 5000, // 5 second header timeout
+        timeout: 10000, // 10 second total timeout
+        // Accept self-signed certificates (standard practice in Gemini protocol).
+        // Certificate trust is enforced separately via TOFU (see utils/tofu.js).
+        tlsOpt: {
+          rejectUnauthorized: false,
+        },
+      },
+      (err, response) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+
+        // Capture the server certificate fingerprint for TOFU verification.
+        let fingerprint = null;
+        try {
+          const cert =
+            response.socket && typeof response.socket.getPeerCertificate === 'function'
+              ? response.socket.getPeerCertificate()
+              : null;
+          if (cert && cert.fingerprint256) {
+            fingerprint = cert.fingerprint256;
+          }
+        } catch {
+          fingerprint = null;
+        }
+
+        let content = '';
+        let byteLength = 0;
+        let aborted = false;
+
+        response.on('data', (chunk) => {
+          if (aborted) {
+            return;
+          }
+          byteLength += chunk.length;
+          if (byteLength > MAX_CONTENT_BYTES) {
+            aborted = true;
+            // Stop buffering and tear down the connection.
+            if (response.socket && typeof response.socket.destroy === 'function') {
+              response.socket.destroy();
+            }
+            reject(
+              new UserFacingError(
+                'Response exceeds the maximum allowed size and was rejected.',
+                502
+              )
+            );
+            return;
+          }
+          content += chunk.toString();
+        });
+
+        response.on('end', () => {
+          if (aborted) {
+            return;
+          }
+          resolve({
+            statusCode: response.statusCode,
+            statusMessage: response.statusMessage,
+            meta: response.meta,
+            content,
+            fingerprint,
+          });
+        });
+
+        response.on('error', (streamErr) => {
+          if (aborted) {
+            return;
+          }
+          reject(streamErr);
+        });
+      }
+    );
+  });
+}
+
+/**
+ * Extract the lowercase MIME type from a Gemini status-20 meta string, which
+ * looks like "text/gemini; charset=utf-8".
+ */
+function parseMimeType(meta) {
+  if (!meta || typeof meta !== 'string') {
+    // Per the Gemini spec, an empty meta defaults to text/gemini.
+    return 'text/gemini';
+  }
+  return meta.split(';')[0].trim().toLowerCase() || 'text/gemini';
+}
+
 export default async function handler(req, res) {
   if (!applyRateLimit(req, res)) {
     return;
@@ -24,96 +149,118 @@ export default async function handler(req, res) {
 
   // Extract the Gemini URL from request body
   const { url } = req.body;
-  
+
   // Validate that we have a proper Gemini URL
   if (!url || !url.startsWith('gemini://')) {
     return res.status(400).json({ error: 'Invalid Gemini URL' });
   }
 
   // Security check to prevent accessing potentially harmful URLs
-  if (!isUrlSafe(url)) {
-    return res.status(403).json({ error: 'Access to this URL is blocked for security reasons' });
+  if (!(await isUrlSafe(url))) {
+    return res
+      .status(403)
+      .json({ error: 'Access to this URL is blocked for security reasons' });
   }
 
   try {
-    // Create a promise wrapper for the callback-based Gemini client
-    const result = await new Promise((resolve, reject) => {
-      sendGeminiRequest(url, {
-        followRedirects: true,      // Automatically follow redirects
-        connectTimeout: 10000,      // 10 second connection timeout
-        headersTimeout: 5000,       // 5 second header timeout
-        timeout: 10000,             // 10 second total timeout
-        // Accept self-signed certificates (standard practice in Gemini protocol)
-        tlsOpt: {
-          rejectUnauthorized: false
-        }
-      }, (err, response) => {
-        if (err) {
-          reject(err);
-          return;
-        }
+    let currentUrl = url; // Already validated above.
+    let redirectsFollowed = 0;
 
-        // Accumulate the response content
-        let content = '';
-        
-        // Collect data chunks as they arrive
-        response.on('data', (chunk) => {
-          content += chunk.toString();
+    // Manual redirect loop with per-hop SSRF validation.
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const result = await sendSingleRequest(currentUrl);
+
+      // TLS Trust-On-First-Use: detect certificate changes (possible MITM).
+      const host = new URL(currentUrl).host;
+      const tofu = verifyFingerprint(host, result.fingerprint);
+      if (tofu.changed) {
+        return res.status(200).json({
+          success: false,
+          error: `The TLS certificate for ${host} has changed since a previous visit. This may indicate a man-in-the-middle attack, so the page was not loaded.`,
+          statusCode: result.statusCode,
         });
+      }
 
-        // When response is complete, resolve with full content
-        response.on('end', () => {
-          resolve({
-            statusCode: response.statusCode,      // Gemini status code (20, 30, 40, etc.)
-            statusMessage: response.statusMessage, // Human-readable status
-            meta: response.meta,                   // Meta information (MIME type or redirect URL)
-            content: content                       // The actual content received
+      // Handle redirects (status 30-39) manually so we can validate each hop.
+      if (result.statusCode >= 30 && result.statusCode < 40) {
+        if (redirectsFollowed >= MAX_REDIRECTS) {
+          return res.status(200).json({
+            success: false,
+            error: 'Too many redirects while fetching the requested URL.',
+            statusCode: result.statusCode,
           });
-        });
+        }
 
-        // Handle stream errors
-        response.on('error', (err) => {
-          reject(err);
-        });
-      });
-    });
+        let resolvedTarget;
+        try {
+          resolvedTarget = new URL(result.meta, currentUrl).toString();
+        } catch {
+          return res.status(200).json({
+            success: false,
+            error: 'Server returned an invalid redirect target.',
+            statusCode: result.statusCode,
+          });
+        }
 
-    // Handle different Gemini protocol status codes
-    if (result.statusCode === 20) {
-      // Status 20: Success - content follows
-      res.status(200).json({
-        success: true,
-        content: result.content,
-        contentType: result.meta,  // MIME type (usually text/gemini)
-        url: url,
-        statusCode: result.statusCode
-      });
-    } else if (result.statusCode >= 30 && result.statusCode < 40) {
-      // Status 30-39: Redirect - meta contains new URL
-      res.status(200).json({
-        success: false,
-        redirect: result.meta,     // The URL to redirect to
-        statusCode: result.statusCode,
-        statusMessage: result.statusMessage
-      });
-    } else {
-      // Status 40+: Various error conditions
-      res.status(200).json({
+        // Only gemini:// redirects are allowed, and each hop must pass SSRF checks.
+        if (!resolvedTarget.startsWith('gemini://') || !(await isUrlSafe(resolvedTarget))) {
+          return res.status(403).json({
+            error: 'Access to this URL is blocked for security reasons',
+          });
+        }
+
+        currentUrl = resolvedTarget;
+        redirectsFollowed += 1;
+        continue;
+      }
+
+      // Non-redirect responses terminate the loop.
+      if (result.statusCode === 20) {
+        // Content-Type enforcement: only render textual payloads. Binary
+        // content (images, archives, etc.) is not force-rendered as gemtext.
+        const mimeType = parseMimeType(result.meta);
+        if (!mimeType.startsWith('text/')) {
+          return res.status(200).json({
+            success: false,
+            error: `Unsupported content type "${mimeType}". This browser can only display text content.`,
+            contentType: result.meta,
+            statusCode: result.statusCode,
+          });
+        }
+
+        return res.status(200).json({
+          success: true,
+          content: result.content,
+          contentType: result.meta, // MIME type (usually text/gemini)
+          url: currentUrl, // Final resolved URL so frontend history is correct.
+          statusCode: result.statusCode,
+        });
+      }
+
+      // Status 40+ (and any other non-success, non-redirect) => error condition.
+      return res.status(200).json({
         success: false,
         error: `${result.statusCode} ${result.statusMessage}`,
         meta: result.meta,
-        statusCode: result.statusCode
+        statusCode: result.statusCode,
       });
     }
-
   } catch (error) {
-    // Log the error for debugging purposes
+    // Log the full error server-side for debugging.
     console.error('Gemini request error:', error);
-    
-    // Return a user-friendly error message
-    res.status(500).json({ 
+
+    // Return a safe, generic message unless the error explicitly carries a
+    // user-facing message (e.g. response-too-large).
+    const message =
+      error instanceof UserFacingError
+        ? error.userMessage
+        : 'Failed to fetch content. Please check the URL and try again.';
+    const status = error instanceof UserFacingError ? error.httpStatus : 500;
+
+    res.status(status).json({
       success: false,
-      error: 'Failed to fetch content: ' + error.message 
+      error: message,
     });
   }
 }

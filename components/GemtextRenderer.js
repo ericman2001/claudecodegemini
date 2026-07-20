@@ -17,9 +17,16 @@ import { ExternalLink } from 'lucide-react';
  * @param {string} content - Raw Gemtext content to render
  * @param {Function} onLinkClick - Callback function for handling link clicks
  */
+// Maximum number of source lines to render. Beyond this the content is
+// truncated with a visible notice to avoid freezing the browser on pathological
+// responses (e.g. millions of newlines).
+const MAX_RENDERED_LINES = 5000;
+
 const GemtextRenderer = ({ content, onLinkClick }) => {
   // Split content into individual lines for parsing
-  const lines = content.split('\n');
+  const allLines = content.split('\n');
+  const truncated = allLines.length > MAX_RENDERED_LINES;
+  const lines = truncated ? allLines.slice(0, MAX_RENDERED_LINES) : allLines;
   const elements = [];
   
   // Track preformatted block state
@@ -105,6 +112,15 @@ const GemtextRenderer = ({ content, onLinkClick }) => {
     else {
       elements.push(<div key={i} className="mb-2"></div>);
     }
+  }
+
+  // Notify the user when content was truncated for performance.
+  if (truncated) {
+    elements.push(
+      <div key="truncation-notice" className="mt-4 p-3 rounded-md bg-yellow-50 border border-yellow-200 text-sm text-yellow-800">
+        Content truncated: only the first {MAX_RENDERED_LINES.toLocaleString()} lines are shown.
+      </div>
+    );
   }
 
   // Render all parsed elements with prose styling
