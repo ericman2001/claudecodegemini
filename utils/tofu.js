@@ -20,20 +20,34 @@ const STORE_PATH =
   process.env.GEMINI_TOFU_STORE_PATH ||
   path.join(os.tmpdir(), 'gemini-browser-tofu.json');
 
-// In-memory cache of the on-disk store. Populated lazily.
+// In-memory cache of the on-disk store, keyed by the file's last-modified time
+// so edits/deletions to the store file are picked up at runtime (without them,
+// clearing a fingerprint to recover from a false alarm would require a restart).
 let cache = null;
+let cacheMtimeMs = null;
 
 function loadStore() {
-  if (cache) {
-    return cache;
-  }
   try {
-    const raw = fs.readFileSync(STORE_PATH, 'utf8');
-    const parsed = JSON.parse(raw);
+    const stat = fs.statSync(STORE_PATH);
+    // Reuse the cache only if the file is unchanged since we last read it.
+    if (cache && cacheMtimeMs === stat.mtimeMs) {
+      return cache;
+    }
+    const parsed = JSON.parse(fs.readFileSync(STORE_PATH, 'utf8'));
     cache = parsed && typeof parsed === 'object' ? parsed : {};
+    cacheMtimeMs = stat.mtimeMs;
   } catch {
-    // Missing or corrupt store starts empty.
-    cache = {};
+    // No readable file on disk.
+    if (cacheMtimeMs !== null) {
+      // A store file we previously loaded has since been removed => treat as an
+      // intentional reset and drop the cached fingerprints.
+      cache = {};
+      cacheMtimeMs = null;
+    } else if (!cache) {
+      // Never had a persisted file (e.g. read-only filesystem): start empty and
+      // keep trust in memory for the lifetime of the process.
+      cache = {};
+    }
   }
   return cache;
 }
@@ -41,6 +55,12 @@ function loadStore() {
 function saveStore(store) {
   try {
     fs.writeFileSync(STORE_PATH, JSON.stringify(store), 'utf8');
+    cache = store;
+    try {
+      cacheMtimeMs = fs.statSync(STORE_PATH).mtimeMs;
+    } catch {
+      cacheMtimeMs = null;
+    }
   } catch (err) {
     // Non-fatal: persistence is best-effort. Trust still works in-memory.
     console.error('TOFU: failed to persist certificate store:', err.message);
