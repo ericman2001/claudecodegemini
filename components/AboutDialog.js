@@ -76,14 +76,14 @@ const AboutDialog = ({ isOpen, onClose }) => {
                 <h3 className="text-lg font-semibold mb-2">Credits</h3>
                 <div className="space-y-1 text-gray-600">
                   <p>
-                    <strong>Primary Development:</strong> Claude (Anthropic's AI Assistant) 🤖
+                    <strong>Primary Development:</strong> Claude (Anthropic&apos;s AI Assistant) 🤖
                   </p>
                   <p>
                     <strong>Human Collaboration:</strong> The repository owner who provided guidance, 
                     debugging assistance, and the vision for this project 🧑‍💻
                   </p>
                   <p className="text-sm mt-2 italic">
-                    "Thanks Claude!" - Human collaborator
+                    &quot;Thanks Claude!&quot; - Human collaborator
                   </p>
                 </div>
               </section>

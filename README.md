@@ -42,7 +42,7 @@ Gemini is a lightweight internet protocol that sits between Gopher and the Web. 
 ## Getting Started
 
 ### Prerequisites
-- Node.js 14.0 or later
+- Node.js 18.18 or later (current Node LTS recommended)
 - npm, yarn, pnpm, or bun package manager
 
 ### Installation
@@ -137,8 +137,16 @@ The browser supports all standard Gemtext elements:
 
 ### Security
 - URL validation to ensure only Gemini protocol URLs are accessed
-- Security checks to prevent accessing potentially harmful URLs
+- SSRF protection: hostnames are resolved to IP addresses and rejected if they fall within private, loopback, link-local, or otherwise reserved ranges. Each redirect hop is re-validated.
+- Response size limits and rendered-line caps to mitigate denial-of-service from oversized or pathological responses
+- TLS Trust-On-First-Use (TOFU): server certificate fingerprints are recorded on first connection and compared on subsequent visits; a changed fingerprint is surfaced as a possible man-in-the-middle attack. A change is auto-accepted only when the previously trusted certificate has already expired (routine self-signed rotation). To manually reset trust for a host, clear the store at `GEMINI_TOFU_STORE_PATH` (defaults to a file in the OS temp dir).
+- SSRF-safe connection pinning: the validated hostname is resolved once and the outbound connection is pinned to that exact IP, closing the DNS-rebinding TOCTOU window between validation and connection
+- Content-Type enforcement: only textual (`text/*`) responses are rendered; binary payloads are not force-rendered
+- Generic client-facing error messages (detailed errors are logged server-side only)
+- Strict Content-Security-Policy in production (`script-src 'self'`)
 - POST requests used to prevent URL logging in server logs
+
+> Note: rate limiting (`utils/security.js`) is in-memory and per-instance, and trusts the `x-forwarded-for` header. This is acceptable for single-instance deployments; for horizontally-scaled deployments it should be backed by a shared store and configured to trust only your proxy's forwarded headers.
 
 ### Browser Compatibility
 Works in all modern browsers that support:
