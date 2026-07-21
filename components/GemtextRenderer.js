@@ -1,4 +1,4 @@
-import { ExternalLink } from 'lucide-react';
+import { ExternalLink, Link as LinkIcon } from 'lucide-react';
 
 /**
  * GemtextRenderer Component
@@ -21,6 +21,17 @@ import { ExternalLink } from 'lucide-react';
 // truncated with a visible notice to avoid freezing the browser on pathological
 // responses (e.g. millions of newlines).
 const MAX_RENDERED_LINES = 5000;
+
+/**
+ * Determine whether a Gemtext link target points outside Geminispace. Links
+ * with no scheme are relative (in-Geminispace); an explicit scheme other than
+ * gemini: (e.g. http, https, mailto, gopher) leaves Geminispace and should be
+ * handed off to the user's normal web browser rather than the Gemini proxy.
+ */
+const isExternalLink = (url) => {
+  const match = /^([a-z][a-z0-9+.-]*):/i.exec(url);
+  return match ? match[1].toLowerCase() !== 'gemini' : false;
+};
 
 const GemtextRenderer = ({ content, onLinkClick }) => {
   // Split content into individual lines for parsing
@@ -65,22 +76,41 @@ const GemtextRenderer = ({ content, onLinkClick }) => {
       const parts = linkMatch.split(/\s+/);
       const url = parts[0];
       const text = parts.length > 1 ? parts.slice(1).join(' ') : url; // Use URL as text if no text provided
-      
-      elements.push(
-        <div key={i} className="mb-2">
-          <a 
-            href="#" 
-            onClick={(e) => {
-              e.preventDefault();
-              onLinkClick(url);
-            }}
-            className="text-blue-600 hover:text-blue-800 underline inline-flex items-center gap-1"
-          >
-            <ExternalLink size={14} />
-            {text}
-          </a>
-        </div>
-      );
+
+      if (isExternalLink(url)) {
+        // Non-Gemini link: open in a new browser tab instead of proxying it,
+        // and mark it so users know it leaves Geminispace.
+        elements.push(
+          <div key={i} className="mb-2">
+            <a
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-purple-700 hover:text-purple-900 underline inline-flex items-center gap-1"
+            >
+              <ExternalLink size={14} />
+              {text}
+              <span className="text-xs text-purple-500">(web {'\u2197'})</span>
+            </a>
+          </div>
+        );
+      } else {
+        elements.push(
+          <div key={i} className="mb-2">
+            <a
+              href="#"
+              onClick={(e) => {
+                e.preventDefault();
+                onLinkClick(url);
+              }}
+              className="text-blue-600 hover:text-blue-800 underline inline-flex items-center gap-1"
+            >
+              <LinkIcon size={14} />
+              {text}
+            </a>
+          </div>
+        );
+      }
     }
     // Parse headers - check in order of specificity (### before ## before #)
     else if (line.startsWith('###')) {
