@@ -114,6 +114,16 @@ const GemtextRenderer = ({ content, onLinkClick }) => {
     }
   }
 
+  // Flush any preformatted block that never received a closing ``` (e.g. when
+  // the line cap truncates the source mid-block) so its content isn't dropped.
+  if (inPreformatted && preformattedContent.length > 0) {
+    elements.push(
+      <pre key="pre-unterminated" className="bg-gray-100 p-4 rounded-md overflow-x-auto text-sm font-mono mb-4">
+        <code>{preformattedContent.join('\n')}</code>
+      </pre>
+    );
+  }
+
   // Notify the user when content was truncated for performance.
   if (truncated) {
     elements.push(

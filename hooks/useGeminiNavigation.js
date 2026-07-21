@@ -72,19 +72,24 @@ const useGeminiNavigation = () => {
       const result = await fetchGeminiContent(resolvedUrl);
       
       if (result.success) {
+        // Prefer the final URL the proxy actually loaded (it follows redirects
+        // server-side), so the address bar, history, and relative-link
+        // resolution all use the correct base.
+        const finalUrl = result.url || resolvedUrl;
+
         // Update content and URL on successful fetch
         setContent(result.content);
-        setUrl(resolvedUrl);
+        setUrl(finalUrl);
         
         if (isHistoryNavigation) {
           // For history navigation, just update the index
           setHistoryIndex(targetIndex);
         } else {
           // For new navigation, update history
-          if (historyIndex === -1 || history[historyIndex] !== resolvedUrl) {
+          if (historyIndex === -1 || history[historyIndex] !== finalUrl) {
             // Truncate any forward history when navigating to new page
             const newHistory = history.slice(0, historyIndex + 1);
-            newHistory.push(resolvedUrl);
+            newHistory.push(finalUrl);
             setHistory(newHistory);
             setHistoryIndex(newHistory.length - 1);
           }

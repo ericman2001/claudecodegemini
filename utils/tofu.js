@@ -51,11 +51,18 @@ function saveStore(store) {
  * Compare a freshly observed certificate fingerprint against the stored one for
  * a host, recording it on first use.
  *
+ * A changed fingerprint is treated as a possible MITM and reported as
+ * `changed: true` — UNLESS the previously trusted certificate has already
+ * expired, in which case the change is accepted as a legitimate certificate
+ * rotation and the store is updated (Gemini servers routinely rotate
+ * self-signed certs on expiry).
+ *
  * @param {string} host - Host identifier (should include port), e.g. "example.org:1965".
  * @param {string} fingerprint - Certificate fingerprint (e.g. SHA-256).
- * @returns {{trusted: boolean, firstUse: boolean, changed: boolean, expected?: string, actual?: string}}
+ * @param {?number} validTo - Epoch ms when the presented cert expires (optional).
+ * @returns {{trusted: boolean, firstUse: boolean, changed: boolean, rotated?: boolean, expected?: string, actual?: string}}
  */
-export function verifyFingerprint(host, fingerprint) {
+export function verifyFingerprint(host, fingerprint, validTo = null) {
   // Without a fingerprint we cannot make a trust decision; do not block.
   if (!host || !fingerprint) {
     return { trusted: true, firstUse: false, changed: false };
@@ -65,20 +72,32 @@ export function verifyFingerprint(host, fingerprint) {
   const known = store[host];
 
   if (!known) {
-    store[host] = fingerprint;
+    store[host] = { fingerprint, validTo: validTo ?? null };
     saveStore(store);
     return { trusted: true, firstUse: true, changed: false };
   }
 
-  if (known === fingerprint) {
+  // Support both the current object form and the legacy plain-string form.
+  const knownFingerprint = typeof known === 'string' ? known : known.fingerprint;
+  const knownValidTo = typeof known === 'string' ? null : known.validTo;
+
+  if (knownFingerprint === fingerprint) {
     return { trusted: true, firstUse: false, changed: false };
+  }
+
+  // Fingerprint changed. If the previously trusted certificate has expired,
+  // accept the new one as a routine rotation rather than a MITM.
+  if (typeof knownValidTo === 'number' && Date.now() > knownValidTo) {
+    store[host] = { fingerprint, validTo: validTo ?? null };
+    saveStore(store);
+    return { trusted: true, firstUse: false, changed: false, rotated: true };
   }
 
   return {
     trusted: false,
     firstUse: false,
     changed: true,
-    expected: known,
+    expected: knownFingerprint,
     actual: fingerprint,
   };
 }

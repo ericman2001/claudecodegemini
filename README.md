@@ -139,7 +139,8 @@ The browser supports all standard Gemtext elements:
 - URL validation to ensure only Gemini protocol URLs are accessed
 - SSRF protection: hostnames are resolved to IP addresses and rejected if they fall within private, loopback, link-local, or otherwise reserved ranges. Each redirect hop is re-validated.
 - Response size limits and rendered-line caps to mitigate denial-of-service from oversized or pathological responses
-- TLS Trust-On-First-Use (TOFU): server certificate fingerprints are recorded on first connection and compared on subsequent visits; a changed fingerprint is surfaced as a possible man-in-the-middle attack
+- TLS Trust-On-First-Use (TOFU): server certificate fingerprints are recorded on first connection and compared on subsequent visits; a changed fingerprint is surfaced as a possible man-in-the-middle attack. A change is auto-accepted only when the previously trusted certificate has already expired (routine self-signed rotation). To manually reset trust for a host, clear the store at `GEMINI_TOFU_STORE_PATH` (defaults to a file in the OS temp dir).
+- SSRF-safe connection pinning: the validated hostname is resolved once and the outbound connection is pinned to that exact IP, closing the DNS-rebinding TOCTOU window between validation and connection
 - Content-Type enforcement: only textual (`text/*`) responses are rendered; binary payloads are not force-rendered
 - Generic client-facing error messages (detailed errors are logged server-side only)
 - Strict Content-Security-Policy in production (`script-src 'self'`)

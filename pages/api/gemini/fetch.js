@@ -1,5 +1,6 @@
+import { StringDecoder } from 'node:string_decoder';
 import { sendGeminiRequest } from '@derhuerst/gemini/client.js';
-import { isUrlSafe, applyRateLimit } from '../../../utils/security';
+import { resolveSafeAddress, applyRateLimit } from '../../../utils/security';
 import { verifyFingerprint } from '../../../utils/tofu';
 
 /**
@@ -38,9 +39,15 @@ class UserFacingError extends Error {
  * certificate fingerprint for TOFU verification.
  *
  * @param {string} targetUrl - Fully-qualified, already-validated gemini:// URL.
- * @returns {Promise<{statusCode:number, statusMessage:string, meta:string, content:string, fingerprint:?string}>}
+ * @param {?string} pinnedAddress - Pre-validated IP address to connect to. Pinning
+ *   the connection to the exact IP that passed the SSRF check prevents a
+ *   DNS-rebinding TOCTOU (the client otherwise performs its own DNS lookup).
+ * @returns {Promise<{statusCode:number, statusMessage:string, meta:string, content:string, fingerprint:?string, certValidTo:?number}>}
  */
-function sendSingleRequest(targetUrl) {
+function sendSingleRequest(targetUrl, pinnedAddress = null) {
+  // Keep TLS SNI/validation tied to the real hostname even when we connect to a
+  // pinned IP address.
+  const servername = new URL(targetUrl).hostname.replace(/^\[|\]$/g, '');
   return new Promise((resolve, reject) => {
     sendGeminiRequest(
       targetUrl,
@@ -53,6 +60,8 @@ function sendSingleRequest(targetUrl) {
         // Certificate trust is enforced separately via TOFU (see utils/tofu.js).
         tlsOpt: {
           rejectUnauthorized: false,
+          // Connect to the exact IP we validated; SNI stays the hostname.
+          ...(pinnedAddress ? { host: pinnedAddress, servername } : {}),
         },
       },
       (err, response) => {
@@ -61,8 +70,9 @@ function sendSingleRequest(targetUrl) {
           return;
         }
 
-        // Capture the server certificate fingerprint for TOFU verification.
+        // Capture the server certificate fingerprint (and expiry) for TOFU.
         let fingerprint = null;
+        let certValidTo = null;
         try {
           const cert =
             response.socket && typeof response.socket.getPeerCertificate === 'function'
@@ -71,6 +81,10 @@ function sendSingleRequest(targetUrl) {
           if (cert && cert.fingerprint256) {
             fingerprint = cert.fingerprint256;
           }
+          if (cert && cert.valid_to) {
+            const parsed = Date.parse(cert.valid_to);
+            certValidTo = Number.isNaN(parsed) ? null : parsed;
+          }
         } catch {
           fingerprint = null;
         }
@@ -78,6 +92,9 @@ function sendSingleRequest(targetUrl) {
         let content = '';
         let byteLength = 0;
         let aborted = false;
+        // Decode UTF-8 across chunk boundaries so multibyte characters split
+        // between TCP packets are not corrupted.
+        const decoder = new StringDecoder('utf8');
 
         response.on('data', (chunk) => {
           if (aborted) {
@@ -98,19 +115,21 @@ function sendSingleRequest(targetUrl) {
             );
             return;
           }
-          content += chunk.toString();
+          content += decoder.write(chunk);
         });
 
         response.on('end', () => {
           if (aborted) {
             return;
           }
+          content += decoder.end();
           resolve({
             statusCode: response.statusCode,
             statusMessage: response.statusMessage,
             meta: response.meta,
             content,
             fingerprint,
+            certValidTo,
           });
         });
 
@@ -155,8 +174,10 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Invalid Gemini URL' });
   }
 
-  // Security check to prevent accessing potentially harmful URLs
-  if (!(await isUrlSafe(url))) {
+  // Security check to prevent accessing potentially harmful URLs. This also
+  // resolves the hostname so we can pin the connection to the validated IP.
+  const initialCheck = await resolveSafeAddress(url);
+  if (!initialCheck.safe) {
     return res
       .status(403)
       .json({ error: 'Access to this URL is blocked for security reasons' });
@@ -164,20 +185,21 @@ export default async function handler(req, res) {
 
   try {
     let currentUrl = url; // Already validated above.
+    let pinnedAddress = initialCheck.address;
     let redirectsFollowed = 0;
 
     // Manual redirect loop with per-hop SSRF validation.
     // eslint-disable-next-line no-constant-condition
     while (true) {
-      const result = await sendSingleRequest(currentUrl);
+      const result = await sendSingleRequest(currentUrl, pinnedAddress);
 
       // TLS Trust-On-First-Use: detect certificate changes (possible MITM).
       const host = new URL(currentUrl).host;
-      const tofu = verifyFingerprint(host, result.fingerprint);
+      const tofu = verifyFingerprint(host, result.fingerprint, result.certValidTo);
       if (tofu.changed) {
         return res.status(200).json({
           success: false,
-          error: `The TLS certificate for ${host} has changed since a previous visit. This may indicate a man-in-the-middle attack, so the page was not loaded.`,
+          error: `The TLS certificate for ${host} has changed since a previous visit. This may indicate a man-in-the-middle attack, so the page was not loaded. If this host legitimately rotated its certificate, clear the stored fingerprint (see GEMINI_TOFU_STORE_PATH).`,
           statusCode: result.statusCode,
         });
       }
@@ -203,14 +225,19 @@ export default async function handler(req, res) {
           });
         }
 
-        // Only gemini:// redirects are allowed, and each hop must pass SSRF checks.
-        if (!resolvedTarget.startsWith('gemini://') || !(await isUrlSafe(resolvedTarget))) {
+        // Only gemini:// redirects are allowed, and each hop must pass SSRF
+        // checks; re-resolve so the next connection is pinned to a validated IP.
+        const hopCheck = resolvedTarget.startsWith('gemini://')
+          ? await resolveSafeAddress(resolvedTarget)
+          : { safe: false, address: null };
+        if (!hopCheck.safe) {
           return res.status(403).json({
             error: 'Access to this URL is blocked for security reasons',
           });
         }
 
         currentUrl = resolvedTarget;
+        pinnedAddress = hopCheck.address;
         redirectsFollowed += 1;
         continue;
       }

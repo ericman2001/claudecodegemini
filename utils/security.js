@@ -125,54 +125,72 @@ const isIpBlocked = (ip) => {
 };
 
 /**
- * Validate that a URL is a safe Gemini target. Resolves the hostname to its
- * IP address(es) and rejects any that fall within private, loopback,
- * link-local or otherwise reserved ranges. This is more robust than substring
- * matching (which is bypassable via alternate IP encodings) and mitigates a
- * class of SSRF attacks. Returns a Promise<boolean>.
+ * Validate that a URL is a safe Gemini target and return the concrete IP
+ * address that should be connected to. Resolves the hostname to its IP
+ * address(es) and rejects any that fall within private, loopback, link-local or
+ * otherwise reserved ranges. This is more robust than substring matching (which
+ * is bypassable via alternate IP encodings) and mitigates a class of SSRF
+ * attacks.
+ *
+ * The returned `address` should be used to pin the outbound connection so that
+ * the IP actually connected to is the same one that was validated here,
+ * eliminating a DNS-rebinding TOCTOU window.
+ *
+ * @param {string} url
+ * @returns {Promise<{safe: boolean, address: (string|null)}>}
  */
-export const isUrlSafe = async (url) => {
+export const resolveSafeAddress = async (url) => {
   try {
     const parsed = new URL(url);
 
     // Only allow gemini protocol
     if (parsed.protocol !== 'gemini:') {
-      return false;
+      return { safe: false, address: null };
     }
 
     // Check for blocked ports
     const port = parsed.port || 1965; // Default Gemini port
     if (BLOCKED_PORTS.includes(parseInt(port, 10))) {
-      return false;
+      return { safe: false, address: null };
     }
 
     // Strip brackets from IPv6 literals for classification.
     const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '');
     if (!hostname) {
-      return false;
+      return { safe: false, address: null };
     }
 
     // Never allow localhost by name.
     if (hostname === 'localhost' || hostname.endsWith('.localhost')) {
-      return false;
+      return { safe: false, address: null };
     }
 
     // If the host is a literal IP, check it directly.
     if (net.isIP(hostname)) {
-      return !isIpBlocked(hostname);
+      return { safe: !isIpBlocked(hostname), address: hostname };
     }
 
     // Otherwise resolve the hostname and reject if ANY resolved address is
     // within a blocked range (defends against DNS rebinding to internal IPs).
     const addresses = await dns.lookup(hostname, { all: true });
     if (!addresses || addresses.length === 0) {
-      return false;
+      return { safe: false, address: null };
     }
-    return addresses.every(({ address }) => !isIpBlocked(address));
+    if (addresses.some(({ address }) => isIpBlocked(address))) {
+      return { safe: false, address: null };
+    }
+    return { safe: true, address: addresses[0].address };
   } catch {
-    return false;
+    return { safe: false, address: null };
   }
 };
+
+/**
+ * Convenience boolean wrapper around {@link resolveSafeAddress}.
+ * @param {string} url
+ * @returns {Promise<boolean>}
+ */
+export const isUrlSafe = async (url) => (await resolveSafeAddress(url)).safe;
 
 // Rate limiting configuration
 export const RATE_LIMIT = {
