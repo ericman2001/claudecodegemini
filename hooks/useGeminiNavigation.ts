@@ -1,20 +1,50 @@
 import { useState, useCallback } from 'react';
 import { resolveGeminiUrl } from '../utils/urlResolver';
 import { DEFAULT_GEMINI_URL, API_ENDPOINTS } from '../utils/constants';
+import type { GeminiFetchResponse } from '../pages/api/gemini/fetch';
 
-/**
- * useGeminiNavigation Hook
- * 
- * Custom hook that manages all navigation state and functionality for the Gemini browser.
- * Handles URL navigation, history management, content fetching, and browser-style
- * navigation controls (back/forward/refresh/home).
- * 
- * @returns {Object} Navigation state and control functions
- */
+/** Options controlling a single navigation. */
+interface NavigateOptions {
+  /** When true, does not modify history (used for back/forward). */
+  isHistoryNavigation?: boolean;
+  /** The history index to update to (for back/forward). */
+  targetIndex?: number | null;
+  /** Current redirect hop count, for loop protection. */
+  redirectDepth?: number;
+}
+
+/** Client-side response shape, extending the API response with the optional
+ *  redirect field the client is prepared to handle. */
+interface GeminiClientResult extends GeminiFetchResponse {
+  redirect?: string;
+}
+
+/** State and control functions returned by {@link useGeminiNavigation}. */
+export interface GeminiNavigation {
+  url: string;
+  content: string;
+  loading: boolean;
+  error: string;
+  navigate: (targetUrl: string, options?: NavigateOptions) => Promise<void>;
+  goBack: () => void;
+  goForward: () => void;
+  refresh: () => void;
+  goHome: () => void;
+  canGoBack: boolean;
+  canGoForward: boolean;
+}
+
 // Maximum number of client-side redirect hops before aborting (loop protection).
 const MAX_REDIRECT_DEPTH = 5;
 
-const useGeminiNavigation = () => {
+/**
+ * useGeminiNavigation Hook
+ *
+ * Custom hook that manages all navigation state and functionality for the Gemini browser.
+ * Handles URL navigation, history management, content fetching, and browser-style
+ * navigation controls (back/forward/refresh/home).
+ */
+const useGeminiNavigation = (): GeminiNavigation => {
   // Current URL being displayed
   const [url, setUrl] = useState(DEFAULT_GEMINI_URL);
   // Fetched Gemtext content
@@ -24,16 +54,15 @@ const useGeminiNavigation = () => {
   // Error messages from failed requests
   const [error, setError] = useState('');
   // Navigation history array
-  const [history, setHistory] = useState([]);
+  const [history, setHistory] = useState<string[]>([]);
   // Current position in history (-1 means no history yet)
   const [historyIndex, setHistoryIndex] = useState(-1);
 
   /**
    * Fetches Gemini content through our API proxy
-   * @param {string} targetUrl - The Gemini URL to fetch
-   * @returns {Promise<Object>} Response containing content or error
+   * @param targetUrl - The Gemini URL to fetch
    */
-  const fetchGeminiContent = async (targetUrl) => {
+  const fetchGeminiContent = async (targetUrl: string): Promise<GeminiClientResult> => {
     const response = await fetch(API_ENDPOINTS.GEMINI_FETCH, {
       method: 'POST',
       headers: {
@@ -45,14 +74,12 @@ const useGeminiNavigation = () => {
   };
 
   /**
-   * Navigate to a new Gemini URL
-   * Handles relative URLs, redirects, and history management
-   * @param {string} targetUrl - The URL to navigate to
-   * @param {Object} options - Navigation options
-   * @param {boolean} options.isHistoryNavigation - If true, doesn't modify history (for back/forward)
-   * @param {number} options.targetIndex - The history index to update to (for back/forward)
+   * Navigate to a new Gemini URL.
+   * Handles relative URLs, redirects, and history management.
+   * @param targetUrl - The URL to navigate to
+   * @param options - Navigation options
    */
-  const navigate = useCallback(async (targetUrl, options = {}) => {
+  const navigate = useCallback(async (targetUrl: string, options: NavigateOptions = {}) => {
     const { isHistoryNavigation = false, targetIndex = null, redirectDepth = 0 } = options;
 
     try {
@@ -78,12 +105,14 @@ const useGeminiNavigation = () => {
         const finalUrl = result.url || resolvedUrl;
 
         // Update content and URL on successful fetch
-        setContent(result.content);
+        setContent(result.content ?? '');
         setUrl(finalUrl);
         
         if (isHistoryNavigation) {
           // For history navigation, just update the index
-          setHistoryIndex(targetIndex);
+          if (targetIndex !== null) {
+            setHistoryIndex(targetIndex);
+          }
         } else {
           // For new navigation, update history
           if (historyIndex === -1 || history[historyIndex] !== finalUrl) {
@@ -96,7 +125,7 @@ const useGeminiNavigation = () => {
         }
       } else if (result.redirect) {
         // Handle Gemini protocol redirects (status 30-39)
-        if (isHistoryNavigation) {
+        if (isHistoryNavigation && targetIndex !== null) {
           // Update the history entry with the redirect URL
           const newHistory = [...history];
           newHistory[targetIndex] = result.redirect;
@@ -111,7 +140,7 @@ const useGeminiNavigation = () => {
         setError(`${result.error || 'Failed to fetch content'} (Status: ${result.statusCode})`);
       }
     } catch (err) {
-      setError(err.message || 'Network error');
+      setError(err instanceof Error ? err.message : 'Network error');
     } finally {
       setLoading(false);
     }

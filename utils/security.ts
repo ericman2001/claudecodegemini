@@ -1,5 +1,6 @@
 import net from 'node:net';
 import dns from 'node:dns/promises';
+import type { NextApiRequest, NextApiResponse } from 'next';
 
 const BLOCKED_PORTS = [
   22, // SSH
@@ -40,15 +41,15 @@ const BLOCKED_V6_CIDRS = [
 ];
 
 // Convert an IPv4 dotted-quad string to a BigInt.
-const ipv4ToBigInt = (ip) =>
+const ipv4ToBigInt = (ip: string): bigint =>
   ip.split('.').reduce((acc, octet) => (acc << 8n) + BigInt(parseInt(octet, 10)), 0n);
 
 // Expand and convert an IPv6 string to a BigInt.
-const ipv6ToBigInt = (ip) => {
+const ipv6ToBigInt = (ip: string): bigint => {
   // Handle IPv4-mapped/embedded addresses (e.g. ::ffff:1.2.3.4).
   const embeddedV4 = ip.match(/(.*:)((\d+)\.(\d+)\.(\d+)\.(\d+))$/);
   let head = ip;
-  let tailValue = null;
+  let tailValue: bigint | null = null;
   if (embeddedV4) {
     head = embeddedV4[1];
     tailValue = ipv4ToBigInt(embeddedV4[2]);
@@ -79,7 +80,7 @@ const ipv6ToBigInt = (ip) => {
   return value;
 };
 
-const cidrToRange = (cidr, version) => {
+const cidrToRange = (cidr: string, version: 4 | 6): { start: bigint; end: bigint } => {
   const [addr, prefixStr] = cidr.split('/');
   const prefix = BigInt(prefixStr);
   const totalBits = version === 4 ? 32n : 128n;
@@ -90,7 +91,7 @@ const cidrToRange = (cidr, version) => {
   return { start: network, end: network | mask };
 };
 
-const isIpBlocked = (ip) => {
+const isIpBlocked = (ip: string): boolean => {
   const version = net.isIP(ip);
   if (version === 4) {
     const value = ipv4ToBigInt(ip);
@@ -136,10 +137,13 @@ const isIpBlocked = (ip) => {
  * the IP actually connected to is the same one that was validated here,
  * eliminating a DNS-rebinding TOCTOU window.
  *
- * @param {string} url
- * @returns {Promise<{safe: boolean, address: (string|null)}>}
  */
-export const resolveSafeAddress = async (url) => {
+export interface SafeAddressResult {
+  safe: boolean;
+  address: string | null;
+}
+
+export const resolveSafeAddress = async (url: string): Promise<SafeAddressResult> => {
   try {
     const parsed = new URL(url);
 
@@ -149,8 +153,8 @@ export const resolveSafeAddress = async (url) => {
     }
 
     // Check for blocked ports
-    const port = parsed.port || 1965; // Default Gemini port
-    if (BLOCKED_PORTS.includes(parseInt(port, 10))) {
+    const port = parsed.port ? parseInt(parsed.port, 10) : 1965; // Default Gemini port
+    if (BLOCKED_PORTS.includes(port)) {
       return { safe: false, address: null };
     }
 
@@ -185,23 +189,21 @@ export const resolveSafeAddress = async (url) => {
   }
 };
 
-/**
- * Convenience boolean wrapper around {@link resolveSafeAddress}.
- * @param {string} url
- * @returns {Promise<boolean>}
- */
-export const isUrlSafe = async (url) => (await resolveSafeAddress(url)).safe;
-
 // Rate limiting configuration
 export const RATE_LIMIT = {
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100, // Limit each IP to 100 requests per windowMs
 };
 
-const rateLimitStore = new Map();
+interface RateLimitRecord {
+  count: number;
+  windowStart: number;
+}
+
+const rateLimitStore = new Map<string | undefined, RateLimitRecord>();
 
 // Clean up old entries every 5 minutes
-setInterval(() => {
+const cleanupTimer = setInterval(() => {
   const now = Date.now();
   for (const [ip, record] of rateLimitStore.entries()) {
     if (now - record.windowStart > RATE_LIMIT.windowMs) {
@@ -209,11 +211,18 @@ setInterval(() => {
     }
   }
 }, 5 * 60 * 1000);
+// The periodic cleanup is best-effort housekeeping; it should not by itself
+// keep the Node process (or a test runner) alive.
+if (typeof cleanupTimer.unref === 'function') {
+  cleanupTimer.unref();
+}
 
-export function applyRateLimit(req, res) {
-  const ip =
-    req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
-    req.socket.remoteAddress;
+export function applyRateLimit(req: NextApiRequest, res: NextApiResponse): boolean {
+  const forwardedFor = req.headers['x-forwarded-for'];
+  const forwardedIp = Array.isArray(forwardedFor)
+    ? forwardedFor[0]
+    : forwardedFor?.split(',')[0];
+  const ip = forwardedIp?.trim() || req.socket.remoteAddress;
   const now = Date.now();
   const { windowMs, max } = RATE_LIMIT;
   let record = rateLimitStore.get(ip);

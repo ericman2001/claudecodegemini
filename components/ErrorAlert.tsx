@@ -1,17 +1,17 @@
 import { AlertCircle } from 'lucide-react';
 
+interface ErrorAlertProps {
+  /** The error message to display, or a falsy value to hide the alert */
+  error: string | null;
+}
+
 /**
  * ErrorAlert Component
- * 
+ *
  * Displays error messages in a styled alert box with an error icon.
  * Only renders when an error is present.
- * 
- * @component
- * @param {Object} props - Component props
- * @param {string|null} props.error - The error message to display, or null to hide the alert
- * @returns {JSX.Element|null} Error alert box or null if no error
  */
-const ErrorAlert = ({ error }) => {
+const ErrorAlert = ({ error }: ErrorAlertProps) => {
   // Don't render anything if there's no error
   if (!error) return null;
 

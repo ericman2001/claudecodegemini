@@ -1,38 +1,51 @@
 import { X, ExternalLink } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import pkg from '../package.json';
+
+interface AboutDialogProps {
+  isOpen: boolean;
+  onClose: () => void;
+}
+
+interface Dependency {
+  name: string;
+  version: string;
+  license: string;
+}
+
+// Combined dependency map so we can read versions straight from package.json
+// and never let this table drift out of sync with the manifest.
+const allDeps: Record<string, string> = {
+  ...pkg.dependencies,
+  ...pkg.devDependencies,
+};
+
+// SPDX license of each package we surface in the About dialog. Only packages
+// listed here are shown; versions are always read from package.json above.
+const DISPLAYED_LICENSES: Record<string, string> = {
+  '@derhuerst/gemini': 'ISC',
+  'lucide-react': 'ISC',
+  next: 'MIT',
+  react: 'MIT',
+  'react-dom': 'MIT',
+  autoprefixer: 'MIT',
+  postcss: 'MIT',
+  tailwindcss: 'MIT',
+};
+
+const dependencies: Dependency[] = Object.entries(DISPLAYED_LICENSES)
+  .filter(([name]) => name in allDeps)
+  .map(([name, license]) => ({ name, version: allDeps[name], license }));
 
 /**
  * AboutDialog Component
- * 
+ *
  * Displays information about the Gemini Browser application including:
  * - Application description
  * - Credits for developers
- * - Dependencies and their licenses
+ * - Dependencies and their licenses (versions read from package.json)
  * - Application license
- * 
- * @param {boolean} isOpen - Whether the dialog is open
- * @param {Function} onClose - Callback to close the dialog
  */
-const AboutDialog = ({ isOpen, onClose }) => {
-  const [dependencies, setDependencies] = useState([]);
-
-  // Load dependency information
-  useEffect(() => {
-    // Define dependencies with their licenses
-    const deps = [
-      { name: '@derhuerst/gemini', version: '^2.0.1', license: 'ISC' },
-      { name: 'lucide-react', version: '^0.263.1', license: 'ISC' },
-      { name: 'next', version: '14.2.29', license: 'MIT' },
-      { name: 'react', version: '^18', license: 'MIT' },
-      { name: 'react-dom', version: '^18', license: 'MIT' },
-      { name: 'autoprefixer', version: '^10.4.21', license: 'MIT' },
-      { name: 'mini-css-extract-plugin', version: '^2.7.6', license: 'MIT' },
-      { name: 'postcss', version: '^8.5.3', license: 'MIT' },
-      { name: 'tailwindcss', version: '^3.4.17', license: 'MIT' },
-    ];
-    setDependencies(deps);
-  }, []);
-
+const AboutDialog = ({ isOpen, onClose }: AboutDialogProps) => {
   if (!isOpen) return null;
 
   return (
