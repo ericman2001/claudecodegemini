@@ -23,10 +23,18 @@ const STORE_PATH =
 // In-memory cache of the on-disk store, keyed by the file's last-modified time
 // so edits/deletions to the store file are picked up at runtime (without them,
 // clearing a fingerprint to recover from a false alarm would require a restart).
-let cache = null;
-let cacheMtimeMs = null;
+interface CertRecord {
+  fingerprint: string;
+  validTo: number | null;
+}
 
-function loadStore() {
+// The on-disk store may also contain the legacy plain-string form (fingerprint only).
+type TofuStore = Record<string, CertRecord | string>;
+
+let cache: TofuStore | null = null;
+let cacheMtimeMs: number | null = null;
+
+function loadStore(): TofuStore {
   try {
     const stat = fs.statSync(STORE_PATH);
     // Reuse the cache only if the file is unchanged since we last read it.
@@ -49,10 +57,10 @@ function loadStore() {
       cache = {};
     }
   }
-  return cache;
+  return cache ?? {};
 }
 
-function saveStore(store) {
+function saveStore(store: TofuStore): void {
   try {
     fs.writeFileSync(STORE_PATH, JSON.stringify(store), 'utf8');
     cache = store;
@@ -63,7 +71,8 @@ function saveStore(store) {
     }
   } catch (err) {
     // Non-fatal: persistence is best-effort. Trust still works in-memory.
-    console.error('TOFU: failed to persist certificate store:', err.message);
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('TOFU: failed to persist certificate store:', message);
   }
 }
 
@@ -77,12 +86,24 @@ function saveStore(store) {
  * rotation and the store is updated (Gemini servers routinely rotate
  * self-signed certs on expiry).
  *
- * @param {string} host - Host identifier (should include port), e.g. "example.org:1965".
- * @param {string} fingerprint - Certificate fingerprint (e.g. SHA-256).
- * @param {?number} validTo - Epoch ms when the presented cert expires (optional).
- * @returns {{trusted: boolean, firstUse: boolean, changed: boolean, rotated?: boolean, expected?: string, actual?: string}}
+ * @param host - Host identifier (should include port), e.g. "example.org:1965".
+ * @param fingerprint - Certificate fingerprint (e.g. SHA-256).
+ * @param validTo - Epoch ms when the presented cert expires (optional).
  */
-export function verifyFingerprint(host, fingerprint, validTo = null) {
+export interface FingerprintVerification {
+  trusted: boolean;
+  firstUse: boolean;
+  changed: boolean;
+  rotated?: boolean;
+  expected?: string;
+  actual?: string;
+}
+
+export function verifyFingerprint(
+  host: string | null | undefined,
+  fingerprint: string | null | undefined,
+  validTo: number | null = null
+): FingerprintVerification {
   // Without a fingerprint we cannot make a trust decision; do not block.
   if (!host || !fingerprint) {
     return { trusted: true, firstUse: false, changed: false };

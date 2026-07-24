@@ -1,21 +1,33 @@
 import { ChevronLeft, ChevronRight, Home as HomeIcon, RefreshCw, Info } from 'lucide-react';
 
+interface NavigationBarProps {
+  /** Whether back navigation is available */
+  canGoBack: boolean;
+  /** Whether forward navigation is available */
+  canGoForward: boolean;
+  onBack: () => void;
+  onForward: () => void;
+  onRefresh: () => void;
+  onHome: () => void;
+  onAbout: () => void;
+}
+
 /**
  * NavigationBar Component
- * 
+ *
  * Provides browser-style navigation controls for the Gemini browser.
  * Includes back, forward, refresh, and home buttons with appropriate
  * disabled states based on navigation history.
- * 
- * @param {boolean} canGoBack - Whether back navigation is available
- * @param {boolean} canGoForward - Whether forward navigation is available
- * @param {Function} onBack - Callback for back button click
- * @param {Function} onForward - Callback for forward button click
- * @param {Function} onRefresh - Callback for refresh button click
- * @param {Function} onHome - Callback for home button click
- * @param {Function} onAbout - Callback for about button click
  */
-const NavigationBar = ({ canGoBack, canGoForward, onBack, onForward, onRefresh, onHome, onAbout }) => {
+const NavigationBar = ({
+  canGoBack,
+  canGoForward,
+  onBack,
+  onForward,
+  onRefresh,
+  onHome,
+  onAbout,
+}: NavigationBarProps) => {
   return (
     <div className="flex items-center gap-2 mb-4">
       {/* Back button - disabled when no history available */}

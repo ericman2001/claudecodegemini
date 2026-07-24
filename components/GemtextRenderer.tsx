@@ -1,11 +1,12 @@
+import { ReactNode } from 'react';
 import { ExternalLink, Link as LinkIcon } from 'lucide-react';
 
 /**
  * GemtextRenderer Component
- * 
+ *
  * Parses and renders Gemtext format (the markup language used by Gemini protocol)
  * into HTML elements with appropriate styling.
- * 
+ *
  * Supports the following Gemtext elements:
  * - Headers (# ## ###)
  * - Links (=>)
@@ -13,10 +14,14 @@ import { ExternalLink, Link as LinkIcon } from 'lucide-react';
  * - Quotes (>)
  * - Preformatted text (```)
  * - Regular paragraphs
- * 
- * @param {string} content - Raw Gemtext content to render
- * @param {Function} onLinkClick - Callback function for handling link clicks
  */
+interface GemtextRendererProps {
+  /** Raw Gemtext content to render */
+  content: string;
+  /** Callback invoked when an in-Geminispace link is clicked */
+  onLinkClick: (url: string) => void;
+}
+
 // Maximum number of source lines to render. Beyond this the content is
 // truncated with a visible notice to avoid freezing the browser on pathological
 // responses (e.g. millions of newlines).
@@ -28,34 +33,41 @@ const MAX_RENDERED_LINES = 5000;
  * gemini: (e.g. http, https, mailto, gopher) leaves Geminispace and should be
  * handed off to the user's normal web browser rather than the Gemini proxy.
  */
-const isExternalLink = (url) => {
+const isExternalLink = (url: string): boolean => {
   const match = /^([a-z][a-z0-9+.-]*):/i.exec(url);
   return match ? match[1].toLowerCase() !== 'gemini' : false;
 };
 
-const GemtextRenderer = ({ content, onLinkClick }) => {
+/** Render a preformatted (```) block. Shared by the normal-close and
+ *  unterminated-flush paths so their markup can't drift apart. */
+const renderPreformatted = (key: string | number, lines: string[]): ReactNode => (
+  <pre
+    key={key}
+    className="bg-gray-100 p-4 rounded-md overflow-x-auto text-sm font-mono mb-4"
+  >
+    <code>{lines.join('\n')}</code>
+  </pre>
+);
+
+const GemtextRenderer = ({ content, onLinkClick }: GemtextRendererProps) => {
   // Split content into individual lines for parsing
   const allLines = content.split('\n');
   const truncated = allLines.length > MAX_RENDERED_LINES;
   const lines = truncated ? allLines.slice(0, MAX_RENDERED_LINES) : allLines;
-  const elements = [];
-  
+  const elements: ReactNode[] = [];
+
   // Track preformatted block state
   let inPreformatted = false;
-  let preformattedContent = [];
+  let preformattedContent: string[] = [];
 
   // Parse each line according to Gemtext format rules
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    
+
     // Handle preformatted text blocks (```)
     if (line.startsWith('```')) {
       if (inPreformatted) {
-        elements.push(
-          <pre key={i} className="bg-gray-100 p-4 rounded-md overflow-x-auto text-sm font-mono mb-4">
-            <code>{preformattedContent.join('\n')}</code>
-          </pre>
-        );
+        elements.push(renderPreformatted(i, preformattedContent));
         preformattedContent = [];
         inPreformatted = false;
       } else {
@@ -147,11 +159,7 @@ const GemtextRenderer = ({ content, onLinkClick }) => {
   // Flush any preformatted block that never received a closing ``` (e.g. when
   // the line cap truncates the source mid-block) so its content isn't dropped.
   if (inPreformatted && preformattedContent.length > 0) {
-    elements.push(
-      <pre key="pre-unterminated" className="bg-gray-100 p-4 rounded-md overflow-x-auto text-sm font-mono mb-4">
-        <code>{preformattedContent.join('\n')}</code>
-      </pre>
-    );
+    elements.push(renderPreformatted('pre-unterminated', preformattedContent));
   }
 
   // Notify the user when content was truncated for performance.

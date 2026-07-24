@@ -1,20 +1,20 @@
-export const resolveGeminiUrl = (targetUrl, currentUrl) => {
+export const resolveGeminiUrl = (targetUrl: string, currentUrl: string): string => {
   if (!targetUrl.startsWith('gemini://')) {
     if (targetUrl.startsWith('/')) {
       try {
         const current = new URL(currentUrl);
         return `gemini://${current.host}${targetUrl}`;
-      } catch (e) {
+      } catch {
         throw new Error('Invalid URL format');
       }
     } else if (!targetUrl.includes('://')) {
       try {
         const current = new URL(currentUrl);
-        const basePath = current.pathname.endsWith('/') 
-          ? current.pathname 
+        const basePath = current.pathname.endsWith('/')
+          ? current.pathname
           : current.pathname.replace(/\/[^\/]*$/, '/');
         return `gemini://${current.host}${basePath}${targetUrl}`;
-      } catch (e) {
+      } catch {
         throw new Error('Invalid URL format');
       }
     }

@@ -1,4 +1,8 @@
 import { StringDecoder } from 'node:string_decoder';
+import type { TLSSocket } from 'node:tls';
+import type { Readable } from 'node:stream';
+import type { NextApiRequest, NextApiResponse } from 'next';
+// @ts-expect-error - @derhuerst/gemini ships no type declarations.
 import { sendGeminiRequest } from '@derhuerst/gemini/client.js';
 import { resolveSafeAddress, applyRateLimit } from '../../../utils/security';
 import { verifyFingerprint } from '../../../utils/tofu';
@@ -9,11 +13,45 @@ import { verifyFingerprint } from '../../../utils/tofu';
  * This endpoint acts as a proxy between the web browser and Gemini servers,
  * handling the Gemini protocol communication and returning content that can
  * be rendered in a web browser.
- *
- * @param {Object} req - Next.js API request object
- * @param {Object} res - Next.js API response object
- * @returns {Object} JSON response with fetched content or error information
  */
+
+/** Shape of the JSON body accepted by this endpoint. */
+interface GeminiFetchRequestBody {
+  url?: string;
+}
+
+/** Shape of the JSON response returned to the client. */
+export interface GeminiFetchResponse {
+  success: boolean;
+  content?: string;
+  contentType?: string;
+  url?: string;
+  statusCode?: number;
+  meta?: string;
+  error?: string;
+}
+
+/** Result of a single (non-redirect-following) Gemini request. */
+interface SingleRequestResult {
+  statusCode: number;
+  statusMessage: string;
+  meta: string;
+  content: string;
+  fingerprint: string | null;
+  certValidTo: number | null;
+}
+
+/**
+ * Minimal view of the response object returned by @derhuerst/gemini's client
+ * (which ships no type declarations): a readable stream carrying the Gemini
+ * status line plus the underlying TLS socket for certificate inspection.
+ */
+interface GeminiClientResponse extends Readable {
+  statusCode: number;
+  statusMessage: string;
+  meta: string;
+  socket: TLSSocket;
+}
 
 // Maximum number of redirects to follow before giving up (loop protection).
 const MAX_REDIRECTS = 5;
@@ -25,7 +63,10 @@ const MAX_CONTENT_BYTES = 5 * 1024 * 1024; // 5 MB
  * is reported to the client generically to avoid leaking internal details.
  */
 class UserFacingError extends Error {
-  constructor(message, statusCode = 502) {
+  readonly userMessage: string;
+  readonly httpStatus: number;
+
+  constructor(message: string, statusCode = 502) {
     super(message);
     this.name = 'UserFacingError';
     this.userMessage = message;
@@ -38,17 +79,19 @@ class UserFacingError extends Error {
  * enforcing a maximum content length. Also captures the server's TLS
  * certificate fingerprint for TOFU verification.
  *
- * @param {string} targetUrl - Fully-qualified, already-validated gemini:// URL.
- * @param {?string} pinnedAddress - Pre-validated IP address to connect to. Pinning
+ * @param targetUrl - Fully-qualified, already-validated gemini:// URL.
+ * @param pinnedAddress - Pre-validated IP address to connect to. Pinning
  *   the connection to the exact IP that passed the SSRF check prevents a
  *   DNS-rebinding TOCTOU (the client otherwise performs its own DNS lookup).
- * @returns {Promise<{statusCode:number, statusMessage:string, meta:string, content:string, fingerprint:?string, certValidTo:?number}>}
  */
-function sendSingleRequest(targetUrl, pinnedAddress = null) {
+function sendSingleRequest(
+  targetUrl: string,
+  pinnedAddress: string | null = null
+): Promise<SingleRequestResult> {
   // Keep TLS SNI/validation tied to the real hostname even when we connect to a
   // pinned IP address.
   const servername = new URL(targetUrl).hostname.replace(/^\[|\]$/g, '');
-  return new Promise((resolve, reject) => {
+  return new Promise<SingleRequestResult>((resolve, reject) => {
     sendGeminiRequest(
       targetUrl,
       {
@@ -64,15 +107,15 @@ function sendSingleRequest(targetUrl, pinnedAddress = null) {
           ...(pinnedAddress ? { host: pinnedAddress, servername } : {}),
         },
       },
-      (err, response) => {
+      (err: Error | null, response: GeminiClientResponse) => {
         if (err) {
           reject(err);
           return;
         }
 
         // Capture the server certificate fingerprint (and expiry) for TOFU.
-        let fingerprint = null;
-        let certValidTo = null;
+        let fingerprint: string | null = null;
+        let certValidTo: number | null = null;
         try {
           const cert =
             response.socket && typeof response.socket.getPeerCertificate === 'function'
@@ -148,7 +191,7 @@ function sendSingleRequest(targetUrl, pinnedAddress = null) {
  * Extract the lowercase MIME type from a Gemini status-20 meta string, which
  * looks like "text/gemini; charset=utf-8".
  */
-function parseMimeType(meta) {
+function parseMimeType(meta: string | null | undefined): string {
   if (!meta || typeof meta !== 'string') {
     // Per the Gemini spec, an empty meta defaults to text/gemini.
     return 'text/gemini';
@@ -156,7 +199,10 @@ function parseMimeType(meta) {
   return meta.split(';')[0].trim().toLowerCase() || 'text/gemini';
 }
 
-export default async function handler(req, res) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse<GeminiFetchResponse | { error: string }>
+) {
   if (!applyRateLimit(req, res)) {
     return;
   }
@@ -167,7 +213,7 @@ export default async function handler(req, res) {
   }
 
   // Extract the Gemini URL from request body
-  const { url } = req.body;
+  const { url } = (req.body ?? {}) as GeminiFetchRequestBody;
 
   // Validate that we have a proper Gemini URL
   if (!url || !url.startsWith('gemini://')) {

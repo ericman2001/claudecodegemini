@@ -1,6 +1,6 @@
 # Gemini Browser
 
-A web-based browser for exploring Geminispace, built with Next.js and React. This application allows you to browse Gemini protocol content through a familiar web interface.
+A web-based browser for exploring Geminispace, built with Next.js, React, and TypeScript. This application allows you to browse Gemini protocol content through a familiar web interface.
 
 ## What is Gemini?
 
@@ -24,26 +24,33 @@ Gemini is a lightweight internet protocol that sits between Gopher and the Web. 
 ## Architecture Overview
 
 ### Frontend
-- **Main Entry**: `pages/index.js` - The primary browser interface
-- **Components**:
+- **Main Entry**: `pages/index.tsx` - The primary browser interface
+- **Components** (under `components/`, all `.tsx`):
   - `GemtextRenderer` - Parses and renders Gemtext format
   - `NavigationBar` - Browser navigation controls
   - `AddressBar` - URL input and navigation
   - `LoadingSpinner` - Loading state indicator
   - `ErrorAlert` - Error message display
-- **Custom Hook**: `useGeminiNavigation` - Manages all navigation state and logic
+  - `AboutDialog` - App info; its dependency table is derived from `package.json`
+- **Custom Hook**: `hooks/useGeminiNavigation.ts` - Manages all navigation state and logic
 
 ### Backend
-- **API Endpoint**: `pages/api/gemini/fetch.js` - Proxy for Gemini protocol requests
+- **API Endpoint**: `pages/api/gemini/fetch.ts` - Proxy for Gemini protocol requests
 - Uses `@derhuerst/gemini` client library
 - Handles Gemini status codes (20 for success, 30-39 for redirects)
 - Accepts self-signed certificates (standard for Gemini)
+
+### Language & Tooling
+- **TypeScript**: the entire source tree (`components/`, `hooks/`, `pages/`, `utils/`) is written in TypeScript with `strict` mode enabled. Config lives in `tsconfig.json`; only the build config files (`next.config.mjs`, `postcss.config.mjs`, `tailwind.config.mjs`) remain `.mjs`.
+- **Testing**: [Jest](https://jestjs.io/) with [Testing Library](https://testing-library.com/) via the `next/jest` transform. Unit tests cover the pure logic in `utils/` (SSRF checks, TOFU, URL resolution) and a component test covers `GemtextRenderer`. There is no end-to-end suite.
 
 ## Getting Started
 
 ### Prerequisites
 - Node.js 18.18 or later (current Node LTS recommended)
 - npm, yarn, pnpm, or bun package manager
+
+> This is a **single-instance** application. The API's rate limiter (`utils/security.ts`) keeps state in-memory and trusts the `x-forwarded-for` header, which is only appropriate behind a single trusted proxy. See [Security](#security).
 
 ### Installation
 
@@ -110,6 +117,8 @@ yarn start
 
 ## Common Commands
 
+This is the canonical command reference for the project (also linked from `CLAUDE.md`).
+
 ```bash
 # Start development server
 npm run dev
@@ -122,6 +131,15 @@ npm start
 
 # Run ESLint
 npm run lint
+
+# Type-check without emitting output
+npm run typecheck
+
+# Run the Jest test suite
+npm test
+
+# Run tests in watch mode
+npm run test:watch
 ```
 
 ## Technical Details
@@ -146,7 +164,7 @@ The browser supports all standard Gemtext elements:
 - Strict Content-Security-Policy in production (`script-src 'self'`)
 - POST requests used to prevent URL logging in server logs
 
-> Note: rate limiting (`utils/security.js`) is in-memory and per-instance, and trusts the `x-forwarded-for` header. This is acceptable for single-instance deployments; for horizontally-scaled deployments it should be backed by a shared store and configured to trust only your proxy's forwarded headers.
+> Note: rate limiting (`utils/security.ts`) is in-memory and per-instance, and trusts the `x-forwarded-for` header. This is acceptable for single-instance deployments; for horizontally-scaled deployments it should be backed by a shared store and configured to trust only your proxy's forwarded headers.
 
 ### Browser Compatibility
 Works in all modern browsers that support:
